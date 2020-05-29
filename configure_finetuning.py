@@ -51,7 +51,7 @@ class FinetuningConfig(object):
     self.do_lower_case = True
 
     # training
-    self.learning_rate = 1e-4
+    self.learning_rate = 5e-5
     self.weight_decay_rate = 0.01
     self.layerwise_lr_decay = 0.8  # if > 0, the learning rate for a layer is
                                    # lr * lr_decay^(depth - max_depth) i.e.,
@@ -64,15 +64,15 @@ class FinetuningConfig(object):
                                            # to disc if existing ones are found
 
     # writing model outputs to disc
-    self.write_test_outputs = False  # whether to write test set outputs,
+    self.write_test_outputs = True  # whether to write test set outputs,
                                      # currently supported for GLUE + SQuAD 2.0
     self.n_writes_test = 5  # write test set predictions for the first n trials
 
     # sizing
-    self.max_seq_length = 128
-    self.train_batch_size = 32
-    self.eval_batch_size = 32
-    self.predict_batch_size = 32
+    self.max_seq_length = 64
+    self.train_batch_size = 16
+    self.eval_batch_size = 8
+    self.predict_batch_size = 8
     self.double_unordered = True  # for tasks like paraphrase where sentence
                                   # order doesn't matter, train the model on
                                   # on both sentence orderings for each example
