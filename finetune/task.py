@@ -22,7 +22,7 @@ from __future__ import print_function
 import abc
 from typing import List, Tuple
 
-import configure_finetuning
+#import configure_finetuning
 from finetune import feature_spec
 from finetune import scorer
 from model import modeling
@@ -40,7 +40,7 @@ class Task(object):
 
   __metaclass__ = abc.ABCMeta
 
-  def __init__(self, config: configure_finetuning.FinetuningConfig, name):
+  def __init__(self, config#: configure_finetuning.FinetuningConfig, name):
     self.config = config
     self.name = name
 
