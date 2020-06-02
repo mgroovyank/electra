@@ -184,6 +184,12 @@ class ModelRunner(object):
 
   def evaluate(self):
     return {task.name: self.evaluate_task(task) for task in self._tasks}
+  
+  def test(self):
+    tasks = task_builder.get_tasks(self._config)
+    for task in tasks:
+      for split in task.get_test_splits():
+        self.write_classification_outputs([task], 1, split)
 
   def evaluate_task(self, task, split="dev", return_results=True):
     """Evaluate the current model."""
@@ -244,11 +250,14 @@ def write_results(config: configure_finetuning.FinetuningConfig, results):
   utils.write_pickle(results, config.results_pkl)
 
 
-def run_finetuning(config: configure_finetuning.FinetuningConfig):
-  """Run finetuning."""
-
-  # Setup for training
-  results = []
+def electra_finetuning(configs):
+  data_dir = configs["data_dir"]
+  model_name = configs["model_name"]
+  hparams = configs["hparams"]
+  tf.logging.set_verbosity(tf.logging.ERROR)
+  config = configure_finetuning.FinetuningConfig(
+      model_name, data_dir, **hparams)
+  
   trial = 1
   heading_info = "model={:}, trial {:}/{:}".format(
       config.model_name, trial, config.num_trials)
@@ -257,77 +266,14 @@ def run_finetuning(config: configure_finetuning.FinetuningConfig):
   utils.log_config(config)
   generic_model_dir = config.model_dir
   tasks = task_builder.get_tasks(config)
-
   # Train and evaluate num_trials models with different random seeds
-  while config.num_trials < 0 or trial <= config.num_trials:
-    config.model_dir = generic_model_dir + "_" + str(trial)
-    if config.do_train:
-      utils.rmkdir(config.model_dir)
+  config.model_dir = generic_model_dir + "_" + str(trial)
+  if config.do_train:
+    utils.rmkdir(config.model_dir)
 
-    model_runner = ModelRunner(config, tasks)
-    if config.do_train:
-      heading("Start training")
-      model_runner.train()
-      utils.log()
-
-    if config.do_eval:
-      heading("Run dev set evaluation")
-      results.append(model_runner.evaluate())
-      write_results(config, results)
-      if config.write_test_outputs and trial <= config.n_writes_test:
-        heading("Running on the test set and writing the predictions")
-        for task in tasks:
-          # Currently only writing preds for GLUE and SQuAD 2.0 is supported
-          if task.name in ["cola", "mrpc", "mnli", "sst", "rte", "qnli", "qqp",
-                           "sts", "newmovies"]:
-            for split in task.get_test_splits():
-              model_runner.write_classification_outputs([task], trial, split)
-          elif task.name == "squad":
-            scorer = model_runner.evaluate_task(task, "test", False)
-            scorer.write_predictions()
-            preds = utils.load_json(config.qa_preds_file("squad"))
-            null_odds = utils.load_json(config.qa_na_file("squad"))
-            for q, _ in preds.items():
-              if null_odds[q] > config.qa_na_threshold:
-                preds[q] = ""
-            utils.write_json(preds, config.test_predictions(
-                task.name, "test", trial))
-          else:
-            utils.log("Skipping task", task.name,
-                      "- writing predictions is not supported for this task")
-
-    if trial != config.num_trials and (not config.keep_all_models):
-      utils.rmrf(config.model_dir)
-    trial += 1
-
-
-def main():
-  parser = argparse.ArgumentParser(description=__doc__)
-  parser.add_argument("--data-dir", required=True,
-                      help="Location of data files (model weights, etc).")
-  parser.add_argument("--model-name", required=True,
-                      help="The name of the model being fine-tuned.")
-  parser.add_argument("--hparams", default="{}",
-                      help="JSON dict of model hyperparameters.")
-  parser.add_argument("--task-config", default="{}",
-                      help="JSON dict of custom fine-tuning task parameters")
-  
-  args = parser.parse_args()
-  if args.hparams.endswith(".json"):
-    hparams = utils.load_json(args.hparams)
-  else:
-    hparams = json.loads(args.hparams)
-    
-  if args.task_config.endswith(".json"):
-    task_config = utils.load_json(args.task_config)
-  else:
-    task_config = json.loads(args.task_config)
-  if len(task_config.keys()) > 0:
-    hparams["tasks"] = task_config
-    
-  tf.logging.set_verbosity(tf.logging.ERROR)
-  run_finetuning(configure_finetuning.FinetuningConfig(
-      args.model_name, args.data_dir, **hparams))
+  model_runner = ModelRunner(config, tasks)
+  return model_runner
+  #run_finetuning(test_obj)
 
 
 if __name__ == "__main__":
