@@ -25,7 +25,7 @@ import random
 import numpy as np
 import tensorflow.compat.v1 as tf
 
-import configure_finetuning
+#import configure_finetuning
 from finetune import feature_spec
 from util import utils
 
@@ -33,7 +33,7 @@ from util import utils
 class Preprocessor(object):
   """Class for loading, preprocessing, and serializing fine-tuning datasets."""
 
-  def __init__(self, config: configure_finetuning.FinetuningConfig, tasks):
+  def __init__(self, config#: configure_finetuning.FinetuningConfig, tasks):
     self._config = config
     self._tasks = tasks
     self._name_to_task = {task.name: task for task in tasks}
