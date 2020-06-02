@@ -35,10 +35,41 @@ import numpy as np
 import scipy
 import sklearn
 
-from finetune import scorer
 
 
-class SentenceLevelScorer(scorer.Scorer):
+class Scorer(object):
+  """Abstract base class for computing evaluation metrics."""
+
+  __metaclass__ = abc.ABCMeta
+
+  def __init__(self):
+    self._updated = False
+    self._cached_results = {}
+
+  @abc.abstractmethod
+  def update(self, results):
+    self._updated = True
+
+  @abc.abstractmethod
+  def get_loss(self):
+    pass
+
+  @abc.abstractmethod
+  def _get_results(self):
+    return []
+
+  def get_results(self, prefix=""):
+    results = self._get_results() if self._updated else self._cached_results
+    self._cached_results = results
+    self._updated = False
+    return [(prefix + k, v) for k, v in results]
+
+  def results_str(self):
+    return " - ".join(["{:}: {:.2f}".format(k, v)
+                       for k, v in self.get_results()])
+
+
+class SentenceLevelScorer(Scorer):
   """Abstract scorer for classification/regression tasks."""
 
   __metaclass__ = abc.ABCMeta
