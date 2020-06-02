@@ -23,13 +23,15 @@ import argparse
 import collections
 import json
 
+import datetime
+import re
+import time
+
 import tensorflow.compat.v1 as tf
 
 import configure_finetuning
 from model import modeling
 from model import optimization
-from util import training_utils
-from util import utils
 
 from model import tokenization
 
@@ -37,12 +39,14 @@ import abc
 import csv
 import os
 
+import pickle
+import sys
+
 import numpy as np
 import scipy
 import sklearn
 
 from typing import List, Tuple
-from model import modeling
 import random
 
 def get_shared_feature_specs(config: configure_finetuning.FinetuningConfig):
@@ -111,24 +115,24 @@ class Preprocessor(object):
     batch_size = (self._config.train_batch_size if is_training else
                   self._config.eval_batch_size)
 
-    utils.log("Loading dataset", dataset_name)
+    log("Loading dataset", dataset_name)
     n_examples = None
     if (self._config.use_tfrecords_if_existing and
         tf.io.gfile.exists(metadata_path)):
-      n_examples = utils.load_json(metadata_path)["n_examples"]
+      n_examples = load_json(metadata_path)["n_examples"]
 
     if n_examples is None:
-      utils.log("Existing tfrecords not found so creating")
+      log("Existing tfrecords not found so creating")
       examples = []
       for task in tasks:
         task_examples = task.get_examples(split)
         examples += task_examples
       if is_training:
         random.shuffle(examples)
-      utils.mkdir(tfrecords_path.rsplit("/", 1)[0])
+      mkdir(tfrecords_path.rsplit("/", 1)[0])
       n_examples = self.serialize_examples(
           examples, is_training, tfrecords_path, batch_size)
-      utils.write_json({"n_examples": n_examples}, metadata_path)
+      write_json({"n_examples": n_examples}, metadata_path)
 
     input_fn = self._input_fn_builder(tfrecords_path, is_training)
     if is_training:
@@ -144,7 +148,7 @@ class Preprocessor(object):
     with tf.io.TFRecordWriter(output_file) as writer:
       for (ex_index, example) in enumerate(examples):
         if ex_index % 2000 == 0:
-          utils.log("Writing example {:} of {:}".format(
+          log("Writing example {:} of {:}".format(
               ex_index, len(examples)))
         for tf_example in self._example_to_tf_example(
             example, is_training,
@@ -434,12 +438,12 @@ class SingleOutputTask(Task):
     assert len(segment_ids) == self.config.max_seq_length
 
     if log:
-      utils.log("  Example {:}".format(example.eid))
-      utils.log("    tokens: {:}".format(" ".join(
+      log("  Example {:}".format(example.eid))
+      log("    tokens: {:}".format(" ".join(
           [tokenization.printable_text(x) for x in tokens])))
-      utils.log("    input_ids: {:}".format(" ".join(map(str, input_ids))))
-      utils.log("    input_mask: {:}".format(" ".join(map(str, input_mask))))
-      utils.log("    segment_ids: {:}".format(" ".join(map(str, segment_ids))))
+      log("    input_ids: {:}".format(" ".join(map(str, input_ids))))
+      log("    input_mask: {:}".format(" ".join(map(str, input_mask))))
+      log("    segment_ids: {:}".format(" ".join(map(str, segment_ids))))
 
     eid = example.eid
     features = {
@@ -474,9 +478,9 @@ class SingleOutputTask(Task):
         examples.append(InputExample(eid=eid, task_name=self.name,
                                      text_a=text_a, text_b=text_b, label=label))
       except Exception as ex:
-        utils.log("Error constructing example from line", i,
+        log("Error constructing example from line", i,
                   "for task", self.name + ":", ex)
-        utils.log("Input causing the error:", line)
+        log("Input causing the error:", line)
     return examples
 
   @abc.abstractmethod
@@ -512,7 +516,7 @@ class ClassificationTask(SingleOutputTask):
       label_map[label] = i
     label_id = label_map[example.label]
     if log:
-      utils.log("    label: {:} (id = {:})".format(example.label, label_id))
+      log("    label: {:} (id = {:})".format(example.label, label_id))
     features[example.task_name + "_label_ids"] = label_id
 
   def get_prediction_module(self, bert_model, features, is_training,
@@ -626,7 +630,7 @@ class FinetuningModel(object):
   def __init__(self, config: configure_finetuning.FinetuningConfig, tasks,
                is_training, features, num_train_steps):
     # Create a shared transformer encoder
-    bert_config = training_utils.get_bert_config(config)
+    bert_config = get_bert_config(config)
     self.bert_config = bert_config
     if config.debug:
       bert_config.num_hidden_layers = 3
@@ -665,7 +669,7 @@ def model_fn_builder(config: configure_finetuning.FinetuningConfig, tasks,
 
   def model_fn(features, labels, mode, params):
     """The `model_fn` for TPUEstimator."""
-    utils.log("Building model...")
+    log("Building model...")
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
     model = FinetuningModel(
         config, tasks, is_training, features, num_train_steps)
@@ -674,7 +678,7 @@ def model_fn_builder(config: configure_finetuning.FinetuningConfig, tasks,
     init_checkpoint = config.init_checkpoint
     if pretraining_config is not None:
       init_checkpoint = tf.train.latest_checkpoint(pretraining_config.model_dir)
-      utils.log("Using checkpoint", init_checkpoint)
+      log("Using checkpoint", init_checkpoint)
     tvars = tf.trainable_variables()
     scaffold_fn = None
     if init_checkpoint:
@@ -703,17 +707,17 @@ def model_fn_builder(config: configure_finetuning.FinetuningConfig, tasks,
           loss=model.loss,
           train_op=train_op,
           scaffold_fn=scaffold_fn,
-          training_hooks=[training_utils.ETAHook(
+          training_hooks=[ETAHook(
               {} if config.use_tpu else dict(loss=model.loss),
               num_train_steps, config.iterations_per_loop, config.use_tpu, 10)])
     else:
       assert mode == tf.estimator.ModeKeys.PREDICT
       output_spec = tf.estimator.tpu.TPUEstimatorSpec(
           mode=mode,
-          predictions=utils.flatten_dict(model.outputs),
+          predictions=flatten_dict(model.outputs),
           scaffold_fn=scaffold_fn)
 
-    utils.log("Building complete")
+    log("Building complete")
     return output_spec
 
   return model_fn
@@ -764,7 +768,7 @@ class ModelRunner(object):
         predict_batch_size=config.predict_batch_size)
 
   def train(self):
-    utils.log("Training for {:} steps".format(self.train_steps))
+    log("Training for {:} steps".format(self.train_steps))
     self._estimator.train(
         input_fn=self._train_input_fn, max_steps=self.train_steps)
 
@@ -779,25 +783,25 @@ class ModelRunner(object):
 
   def evaluate_task(self, task, split="dev", return_results=True):
     """Evaluate the current model."""
-    utils.log("Evaluating", task.name)
+    log("Evaluating", task.name)
     eval_input_fn, _ = self._preprocessor.prepare_predict([task], split)
     results = self._estimator.predict(input_fn=eval_input_fn,
                                       yield_single_examples=True)
     scorer = task.get_scorer()
     for r in results:
       if r["task_id"] != len(self._tasks):  # ignore padding examples
-        r = utils.nest_dict(r, self._config.task_names)
+        r = nest_dict(r, self._config.task_names)
         scorer.update(r[task.name])
     if return_results:
-      utils.log(task.name + ": " + scorer.results_str())
-      utils.log()
+      log(task.name + ": " + scorer.results_str())
+      log()
       return dict(scorer.get_results())
     else:
       return scorer
 
   def write_classification_outputs(self, tasks, trial, split):
     """Write classification predictions to disk."""
-    utils.log("Writing out predictions for", tasks, split)
+    log("Writing out predictions for", tasks, split)
     predict_input_fn, _ = self._preprocessor.prepare_predict(tasks, split)
     results = self._estimator.predict(input_fn=predict_input_fn,
                                       yield_single_examples=True)
@@ -805,24 +809,24 @@ class ModelRunner(object):
     logits = collections.defaultdict(dict)
     for r in results:
       if r["task_id"] != len(self._tasks):
-        r = utils.nest_dict(r, self._config.task_names)
+        r = nest_dict(r, self._config.task_names)
         task_name = self._config.task_names[r["task_id"]]
         logits[task_name][r[task_name]["eid"]] = (
             r[task_name]["logits"] if "logits" in r[task_name]
             else r[task_name]["predictions"])
     for task_name in logits:
-      utils.log("Pickling predictions for {:} {:} examples ({:})".format(
+      log("Pickling predictions for {:} {:} examples ({:})".format(
           len(logits[task_name]), task_name, split))
       if trial <= self._config.n_writes_test:
-        utils.write_pickle(logits[task_name], self._config.test_predictions(
+        write_pickle(logits[task_name], self._config.test_predictions(
             task_name, split, trial))
 
 
 def write_results(config: configure_finetuning.FinetuningConfig, results):
   """Write evaluation metrics to disk."""
-  utils.log("Writing results to", config.results_txt)
-  utils.mkdir(config.results_txt.rsplit("/", 1)[0])
-  utils.write_pickle(results, config.results_pkl)
+  log("Writing results to", config.results_txt)
+  mkdir(config.results_txt.rsplit("/", 1)[0])
+  write_pickle(results, config.results_pkl)
   with tf.io.gfile.GFile(config.results_txt, "w") as f:
     results_str = ""
     for trial_results in results:
@@ -833,7 +837,7 @@ def write_results(config: configure_finetuning.FinetuningConfig, results):
             ["{:}: {:.2f}".format(k, v)
              for k, v in task_results.items()]) + "\n"
     f.write(results_str)
-  utils.write_pickle(results, config.results_pkl)
+  write_pickle(results, config.results_pkl)
 
 
 def electra_finetuning(configs):
@@ -847,19 +851,185 @@ def electra_finetuning(configs):
   trial = 1
   heading_info = "model={:}, trial {:}/{:}".format(
       config.model_name, trial, config.num_trials)
-  heading = lambda msg: utils.heading(msg + ": " + heading_info)
-  heading("Config")
-  utils.log_config(config)
+  heading2 = lambda msg: heading(msg + ": " + heading_info)
+  heading2("Config")
+  log_config(config)
   generic_model_dir = config.model_dir
   tasks = get_tasks(config)
   # Train and evaluate num_trials models with different random seeds
   config.model_dir = generic_model_dir + "_" + str(trial)
   if config.do_train:
-    utils.rmkdir(config.model_dir)
+    rmkdir(config.model_dir)
 
   model_runner = ModelRunner(config, tasks)
   return model_runner
-  #run_finetuning(test_obj)
+
+
+def load_json(path):
+  with tf.io.gfile.GFile(path, "r") as f:
+    return json.load(f)
+
+
+def write_json(o, path):
+  if "/" in path:
+    tf.io.gfile.makedirs(path.rsplit("/", 1)[0])
+  with tf.io.gfile.GFile(path, "w") as f:
+    json.dump(o, f)
+
+
+def load_pickle(path):
+  with tf.io.gfile.GFile(path, "rb") as f:
+    return pickle.load(f)
+
+
+def write_pickle(o, path):
+  if "/" in path:
+    tf.io.gfile.makedirs(path.rsplit("/", 1)[0])
+  with tf.io.gfile.GFile(path, "wb") as f:
+    pickle.dump(o, f, -1)
+
+
+def mkdir(path):
+  if not tf.io.gfile.exists(path):
+    tf.io.gfile.makedirs(path)
+
+
+def rmrf(path):
+  if tf.io.gfile.exists(path):
+    tf.io.gfile.rmtree(path)
+
+
+def rmkdir(path):
+  rmrf(path)
+  mkdir(path)
+
+
+def log(*args):
+  msg = " ".join(map(str, args))
+  sys.stdout.write(msg + "\n")
+  sys.stdout.flush()
+
+
+def log_config(config):
+  for key, value in sorted(config.__dict__.items()):
+    log(key, value)
+  log()
+
+
+def heading(*args):
+  log(80 * "=")
+  log(*args)
+  log(80 * "=")
+
+
+def nest_dict(d, prefixes, delim="_"):
+  """Go from {prefix_key: value} to {prefix: {key: value}}."""
+  nested = {}
+  for k, v in d.items():
+    for prefix in prefixes:
+      if k.startswith(prefix + delim):
+        if prefix not in nested:
+          nested[prefix] = {}
+        nested[prefix][k.split(delim, 1)[1]] = v
+      else:
+        nested[k] = v
+  return nested
+
+
+def flatten_dict(d, delim="_"):
+  """Go from {prefix: {key: value}} to {prefix_key: value}."""
+  flattened = {}
+  for k, v in d.items():
+    if isinstance(v, dict):
+      for k2, v2 in v.items():
+        flattened[k + delim + k2] = v2
+    else:
+      flattened[k] = v
+  return flattened
+
+
+class ETAHook(tf.estimator.SessionRunHook):
+  """Print out the time remaining during training/evaluation."""
+
+  def __init__(self, to_log, n_steps, iterations_per_loop, on_tpu,
+               log_every=1, is_training=True):
+    self._to_log = to_log
+    self._n_steps = n_steps
+    self._iterations_per_loop = iterations_per_loop
+    self._on_tpu = on_tpu
+    self._log_every = log_every
+    self._is_training = is_training
+    self._steps_run_so_far = 0
+    self._global_step = None
+    self._global_step_tensor = None
+    self._start_step = None
+    self._start_time = None
+
+  def begin(self):
+    self._global_step_tensor = tf.train.get_or_create_global_step()
+
+  def before_run(self, run_context):
+    if self._start_time is None:
+      self._start_time = time.time()
+    return tf.estimator.SessionRunArgs(self._to_log)
+
+  def after_run(self, run_context, run_values):
+    self._global_step = run_context.session.run(self._global_step_tensor)
+    self._steps_run_so_far += self._iterations_per_loop if self._on_tpu else 1
+    if self._start_step is None:
+      self._start_step = self._global_step - (self._iterations_per_loop
+                                              if self._on_tpu else 1)
+    self.log(run_values)
+
+  def end(self, session):
+    self._global_step = session.run(self._global_step_tensor)
+    self.log()
+
+  def log(self, run_values=None):
+    step = self._global_step if self._is_training else self._steps_run_so_far
+    if step % self._log_every != 0:
+      return
+    msg = "{:}/{:} = {:.1f}%".format(step, self._n_steps,
+                                     100.0 * step / self._n_steps)
+    time_elapsed = time.time() - self._start_time
+    time_per_step = time_elapsed / (
+        (step - self._start_step) if self._is_training else step)
+    msg += ", SPS: {:.1f}".format(1 / time_per_step)
+    msg += ", ELAP: " + secs_to_str(time_elapsed)
+    msg += ", ETA: " + secs_to_str(
+        (self._n_steps - step) * time_per_step)
+    if run_values is not None:
+      for tag, value in run_values.results.items():
+        msg += " - " + str(tag) + (": {:.4f}".format(value))
+    log(msg)
+
+
+def secs_to_str(secs):
+  s = str(datetime.timedelta(seconds=int(round(secs))))
+  s = re.sub("^0:", "", s)
+  s = re.sub("^0", "", s)
+  s = re.sub("^0:", "", s)
+  s = re.sub("^0", "", s)
+  return s
+
+
+def get_bert_config(config):
+  """Get model hyperparameters based on a pretraining/finetuning config"""
+  if config.model_size == "large":
+    args = {"hidden_size": 1024, "num_hidden_layers": 24}
+  elif config.model_size == "base":
+    args = {"hidden_size": 768, "num_hidden_layers": 12}
+  elif config.model_size == "small":
+    args = {"hidden_size": 256, "num_hidden_layers": 12}
+  else:
+    raise ValueError("Unknown model size", config.model_size)
+  args["vocab_size"] = config.vocab_size
+  args.update(**config.model_hparam_overrides)
+  # by default the ff size and num attn heads are determined by the hidden size
+  args["num_attention_heads"] = max(1, args["hidden_size"] // 64)
+  args["intermediate_size"] = 4 * args["hidden_size"]
+  args.update(**config.model_hparam_overrides)
+  return modeling.BertConfig.from_dict(args)
 
 
 if __name__ == "__main__":
