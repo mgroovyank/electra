@@ -27,9 +27,52 @@ import tensorflow.compat.v1 as tf
 import configure_finetuning
 from finetune import feature_spec
 from finetune import task
-from finetune.classification import classification_metrics
 from model import tokenization
 from util import utils
+
+import abc
+import numpy as np
+import scipy
+import sklearn
+
+from finetune import scorer
+
+
+class SentenceLevelScorer(scorer.Scorer):
+  """Abstract scorer for classification/regression tasks."""
+
+  __metaclass__ = abc.ABCMeta
+
+  def __init__(self):
+    super(SentenceLevelScorer, self).__init__()
+    self._total_loss = 0
+    self._true_labels = []
+    self._preds = []
+
+  def update(self, results):
+    super(SentenceLevelScorer, self).update(results)
+    self._total_loss += results['loss']
+    self._true_labels.append(results['label_ids'] if 'label_ids' in results
+                             else results['targets'])
+    self._preds.append(results['predictions'])
+
+  def get_loss(self):
+    return self._total_loss / len(self._true_labels)
+
+
+class AccuracyScorer(SentenceLevelScorer):
+
+  def _get_results(self):
+    correct, count = 0, 0
+    for y_true, pred in zip(self._true_labels, self._preds):
+      count += 1
+      correct += (1 if y_true == pred else 0)
+    return [
+        ('accuracy', 100.0 * correct / count),
+        ('loss', self.get_loss()),
+    ]
+
+
 
 
 class InputExample(task.Example):
