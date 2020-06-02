@@ -19,19 +19,19 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import configure_finetuning
+#import configure_finetuning
 from finetune.classification import classification_tasks
 from model import tokenization
 
 
-def get_tasks(config: configure_finetuning.FinetuningConfig):
+def get_tasks(config#: configure_finetuning.FinetuningConfig):
   tokenizer = tokenization.FullTokenizer(vocab_file=config.vocab_file,
                                          do_lower_case=config.do_lower_case)
   return [get_task(config, task_name, tokenizer)
           for task_name in config.task_names]
 
 
-def get_task(config: configure_finetuning.FinetuningConfig, task_name,
+def get_task(config#: configure_finetuning.FinetuningConfig, task_name,
              tokenizer):
   """Get an instance of a task based on its name."""
   if (task_name in config.tasks):
