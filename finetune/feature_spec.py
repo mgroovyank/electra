@@ -22,10 +22,10 @@ from __future__ import print_function
 import numpy as np
 import tensorflow.compat.v1 as tf
 
-import configure_finetuning
+#import configure_finetuning
 
 
-def get_shared_feature_specs(config: configure_finetuning.FinetuningConfig):
+def get_shared_feature_specs(config#: configure_finetuning.FinetuningConfig):
   """Non-task-specific model inputs."""
   return [
       FeatureSpec("input_ids", [config.max_seq_length]),
