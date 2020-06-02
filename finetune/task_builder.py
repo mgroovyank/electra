@@ -20,7 +20,7 @@ from __future__ import division
 from __future__ import print_function
 
 import configure_finetuning
-from finetune.classification import classification_tasks
+from finetune import classification_tasks
 from model import tokenization
 
 
