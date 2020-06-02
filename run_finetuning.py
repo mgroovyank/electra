@@ -26,7 +26,6 @@ import json
 import tensorflow.compat.v1 as tf
 
 import configure_finetuning
-from finetune import preprocessing
 from finetune import task_builder
 from model import modeling
 from model import optimization
@@ -140,7 +139,7 @@ class ModelRunner(object):
                pretraining_config=None):
     self._config = config
     self._tasks = tasks
-    self._preprocessor = preprocessing.Preprocessor(config, self._tasks)
+    self._preprocessor = task_builder.Preprocessor(config, self._tasks)
 
     is_per_host = tf.estimator.tpu.InputPipelineConfig.PER_HOST_V2
     tpu_cluster_resolver = None
