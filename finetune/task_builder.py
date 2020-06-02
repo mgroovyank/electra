@@ -26,8 +26,6 @@ import abc
 import csv
 import os
 import tensorflow.compat.v1 as tf
-
-from finetune import feature_spec
 from util import utils
 
 import numpy as np
@@ -41,6 +39,37 @@ from model import modeling
 import collections
 import random
 
+def get_shared_feature_specs(config: configure_finetuning.FinetuningConfig):
+  """Non-task-specific model inputs."""
+  return [
+      FeatureSpec("input_ids", [config.max_seq_length]),
+      FeatureSpec("input_mask", [config.max_seq_length]),
+      FeatureSpec("segment_ids", [config.max_seq_length]),
+      FeatureSpec("task_id", []),
+  ]
+
+
+class FeatureSpec(object):
+  """Defines a feature passed as input to the model."""
+
+  def __init__(self, name, shape, default_value_fn=None, is_int_feature=True):
+    self.name = name
+    self.shape = shape
+    self.default_value_fn = default_value_fn
+    self.is_int_feature = is_int_feature
+
+  def get_parsing_spec(self):
+    return tf.io.FixedLenFeature(
+        self.shape, tf.int64 if self.is_int_feature else tf.float32)
+
+  def get_default_values(self):
+    if self.default_value_fn:
+      return self.default_value_fn(self.shape)
+    else:
+      return np.zeros(
+          self.shape, np.int64 if self.is_int_feature else np.float32)
+
+
 
 class Preprocessor(object):
   """Class for loading, preprocessing, and serializing fine-tuning datasets."""
@@ -50,7 +79,7 @@ class Preprocessor(object):
     self._tasks = tasks
     self._name_to_task = {task.name: task for task in tasks}
 
-    self._feature_specs = feature_spec.get_shared_feature_specs(config)
+    self._feature_specs = get_shared_feature_specs(config)
     for task in tasks:
       self._feature_specs += task.get_feature_specs()
     self._name_to_feature_config = {
@@ -280,7 +309,7 @@ class Task(object):
     pass
 
   @abc.abstractmethod
-  def get_feature_specs(self) -> List[feature_spec.FeatureSpec]:
+  def get_feature_specs(self) -> List[FeatureSpec]:
     pass
 
   @abc.abstractmethod
@@ -468,8 +497,8 @@ class ClassificationTask(SingleOutputTask):
     return self._label_list[0]
 
   def get_feature_specs(self):
-    return [feature_spec.FeatureSpec(self.name + "_eid", []),
-            feature_spec.FeatureSpec(self.name + "_label_ids", [])]
+    return [FeatureSpec(self.name + "_eid", []),
+            FeatureSpec(self.name + "_label_ids", [])]
 
   def _add_features(self, features, example, log):
     label_map = {}
@@ -577,9 +606,7 @@ def get_task(config: configure_finetuning.FinetuningConfig, task_name,
   """Get an instance of a task based on its name."""
   if (task_name in config.tasks):
     if config.tasks[task_name]["type"] == "classification":
-      return StandardTSV(config, task_name,
-                                              config.tasks[task_name],
-                                              tokenizer)
+      return StandardTSV(config, task_name, config.tasks[task_name], tokenizer)
     else:
       raise ValueError("Unknown task type: " + config.tasks[task_name]["type"])
   else:
