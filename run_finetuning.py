@@ -23,6 +23,9 @@ import argparse
 import collections
 import json
 
+import pickle
+import sys
+
 import tensorflow.compat.v1 as tf
 
 
@@ -31,11 +34,92 @@ from finetune import task_builder
 from model import modeling
 from model import optimization
 from util import training_utils
-from util import utils
 
 import os
 
 import tensorflow.compat.v1 as tf
+
+def load_json(path):
+  with tf.io.gfile.GFile(path, "r") as f:
+    return json.load(f)
+
+
+def write_json(o, path):
+  if "/" in path:
+    tf.io.gfile.makedirs(path.rsplit("/", 1)[0])
+  with tf.io.gfile.GFile(path, "w") as f:
+    json.dump(o, f)
+
+
+def load_pickle(path):
+  with tf.io.gfile.GFile(path, "rb") as f:
+    return pickle.load(f)
+
+
+def write_pickle(o, path):
+  if "/" in path:
+    tf.io.gfile.makedirs(path.rsplit("/", 1)[0])
+  with tf.io.gfile.GFile(path, "wb") as f:
+    pickle.dump(o, f, -1)
+
+
+def mkdir(path):
+  if not tf.io.gfile.exists(path):
+    tf.io.gfile.makedirs(path)
+
+
+def rmrf(path):
+  if tf.io.gfile.exists(path):
+    tf.io.gfile.rmtree(path)
+
+
+def rmkdir(path):
+  rmrf(path)
+  mkdir(path)
+
+
+def log(*args):
+  msg = " ".join(map(str, args))
+  sys.stdout.write(msg + "\n")
+  sys.stdout.flush()
+
+
+def log_config(config):
+  for key, value in sorted(config.__dict__.items()):
+    log(key, value)
+  log()
+
+
+def heading(*args):
+  log(80 * "=")
+  log(*args)
+  log(80 * "=")
+
+
+def nest_dict(d, prefixes, delim="_"):
+  """Go from {prefix_key: value} to {prefix: {key: value}}."""
+  nested = {}
+  for k, v in d.items():
+    for prefix in prefixes:
+      if k.startswith(prefix + delim):
+        if prefix not in nested:
+          nested[prefix] = {}
+        nested[prefix][k.split(delim, 1)[1]] = v
+      else:
+        nested[k] = v
+  return nested
+
+
+def flatten_dict(d, delim="_"):
+  """Go from {prefix: {key: value}} to {prefix_key: value}."""
+  flattened = {}
+  for k, v in d.items():
+    if isinstance(v, dict):
+      for k2, v2 in v.items():
+        flattened[k + delim + k2] = v2
+    else:
+      flattened[k] = v
+  return flattened
 
 
 class FinetuningConfig(object):
@@ -217,7 +301,7 @@ def model_fn_builder(config: configure_finetuning.FinetuningConfig, tasks,
 
   def model_fn(features, labels, mode, params):
     """The `model_fn` for TPUEstimator."""
-    utils.log("Building model...")
+    log("Building model...")
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
     model = FinetuningModel(
         config, tasks, is_training, features, num_train_steps)
@@ -226,7 +310,7 @@ def model_fn_builder(config: configure_finetuning.FinetuningConfig, tasks,
     init_checkpoint = config.init_checkpoint
     if pretraining_config is not None:
       init_checkpoint = tf.train.latest_checkpoint(pretraining_config.model_dir)
-      utils.log("Using checkpoint", init_checkpoint)
+      log("Using checkpoint", init_checkpoint)
     tvars = tf.trainable_variables()
     scaffold_fn = None
     if init_checkpoint:
@@ -262,10 +346,10 @@ def model_fn_builder(config: configure_finetuning.FinetuningConfig, tasks,
       assert mode == tf.estimator.ModeKeys.PREDICT
       output_spec = tf.estimator.tpu.TPUEstimatorSpec(
           mode=mode,
-          predictions=utils.flatten_dict(model.outputs),
+          predictions=flatten_dict(model.outputs),
           scaffold_fn=scaffold_fn)
 
-    utils.log("Building complete")
+    log("Building complete")
     return output_spec
 
   return model_fn
@@ -316,7 +400,7 @@ class ModelRunner(object):
         predict_batch_size=config.predict_batch_size)
 
   def train(self):
-    utils.log("Training for {:} steps".format(self.train_steps))
+    log("Training for {:} steps".format(self.train_steps))
     self._estimator.train(
         input_fn=self._train_input_fn, max_steps=self.train_steps)
 
@@ -331,25 +415,25 @@ class ModelRunner(object):
 
   def evaluate_task(self, task, split="dev", return_results=True):
     """Evaluate the current model."""
-    utils.log("Evaluating", task.name)
+    log("Evaluating", task.name)
     eval_input_fn, _ = self._preprocessor.prepare_predict([task], split)
     results = self._estimator.predict(input_fn=eval_input_fn,
                                       yield_single_examples=True)
     scorer = task.get_scorer()
     for r in results:
       if r["task_id"] != len(self._tasks):  # ignore padding examples
-        r = utils.nest_dict(r, self._config.task_names)
+        r = nest_dict(r, self._config.task_names)
         scorer.update(r[task.name])
     if return_results:
-      utils.log(task.name + ": " + scorer.results_str())
-      utils.log()
+      log(task.name + ": " + scorer.results_str())
+      log()
       return dict(scorer.get_results())
     else:
       return scorer
 
   def write_classification_outputs(self, tasks, trial, split):
     """Write classification predictions to disk."""
-    utils.log("Writing out predictions for", tasks, split)
+    log("Writing out predictions for", tasks, split)
     predict_input_fn, _ = self._preprocessor.prepare_predict(tasks, split)
     results = self._estimator.predict(input_fn=predict_input_fn,
                                       yield_single_examples=True)
@@ -357,24 +441,24 @@ class ModelRunner(object):
     logits = collections.defaultdict(dict)
     for r in results:
       if r["task_id"] != len(self._tasks):
-        r = utils.nest_dict(r, self._config.task_names)
+        r = nest_dict(r, self._config.task_names)
         task_name = self._config.task_names[r["task_id"]]
         logits[task_name][r[task_name]["eid"]] = (
             r[task_name]["logits"] if "logits" in r[task_name]
             else r[task_name]["predictions"])
     for task_name in logits:
-      utils.log("Pickling predictions for {:} {:} examples ({:})".format(
+      log("Pickling predictions for {:} {:} examples ({:})".format(
           len(logits[task_name]), task_name, split))
       if trial <= self._config.n_writes_test:
-        utils.write_pickle(logits[task_name], self._config.test_predictions(
+        write_pickle(logits[task_name], self._config.test_predictions(
             task_name, split, trial))
 
 
 def write_results(config: configure_finetuning.FinetuningConfig, results):
   """Write evaluation metrics to disk."""
-  utils.log("Writing results to", config.results_txt)
-  utils.mkdir(config.results_txt.rsplit("/", 1)[0])
-  utils.write_pickle(results, config.results_pkl)
+  log("Writing results to", config.results_txt)
+  mkdir(config.results_txt.rsplit("/", 1)[0])
+  write_pickle(results, config.results_pkl)
   with tf.io.gfile.GFile(config.results_txt, "w") as f:
     results_str = ""
     for trial_results in results:
@@ -385,7 +469,7 @@ def write_results(config: configure_finetuning.FinetuningConfig, results):
             ["{:}: {:.2f}".format(k, v)
              for k, v in task_results.items()]) + "\n"
     f.write(results_str)
-  utils.write_pickle(results, config.results_pkl)
+  write_pickle(results, config.results_pkl)
 
 
 def electra_finetuning(configs):
@@ -407,7 +491,7 @@ def electra_finetuning(configs):
   # Train and evaluate num_trials models with different random seeds
   config.model_dir = generic_model_dir + "_" + str(trial)
   if config.do_train:
-    utils.rmkdir(config.model_dir)
+    rmkdir(config.model_dir)
 
   model_runner = ModelRunner(config, tasks)
   return model_runner
