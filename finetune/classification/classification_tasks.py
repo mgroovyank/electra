@@ -30,7 +30,6 @@ from finetune import task
 from model import tokenization
 from util import utils
 
-import abc
 import numpy as np
 import scipy
 import sklearn
