@@ -305,7 +305,7 @@ class Task(object):
     pass
 
   @abc.abstractmethod
-  def get_scorer(self) -> scorer.Scorer:
+  def get_scorer(self) -> Scorer:
     pass
 
   @abc.abstractmethod
