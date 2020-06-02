@@ -23,327 +23,15 @@ import argparse
 import collections
 import json
 
-import pickle
-import sys
-
 import tensorflow.compat.v1 as tf
 
-
+import configure_finetuning
 from finetune import preprocessing
 from finetune import task_builder
 from model import modeling
 from model import optimization
-
-import os
-
-import tensorflow.compat.v1 as tf
-
-
-import datetime
-import re
-import time
-
-
-
-class ETAHook(tf.estimator.SessionRunHook):
-  """Print out the time remaining during training/evaluation."""
-
-  def __init__(self, to_log, n_steps, iterations_per_loop, on_tpu,
-               log_every=1, is_training=True):
-    self._to_log = to_log
-    self._n_steps = n_steps
-    self._iterations_per_loop = iterations_per_loop
-    self._on_tpu = on_tpu
-    self._log_every = log_every
-    self._is_training = is_training
-    self._steps_run_so_far = 0
-    self._global_step = None
-    self._global_step_tensor = None
-    self._start_step = None
-    self._start_time = None
-
-  def begin(self):
-    self._global_step_tensor = tf.train.get_or_create_global_step()
-
-  def before_run(self, run_context):
-    if self._start_time is None:
-      self._start_time = time.time()
-    return tf.estimator.SessionRunArgs(self._to_log)
-
-  def after_run(self, run_context, run_values):
-    self._global_step = run_context.session.run(self._global_step_tensor)
-    self._steps_run_so_far += self._iterations_per_loop if self._on_tpu else 1
-    if self._start_step is None:
-      self._start_step = self._global_step - (self._iterations_per_loop
-                                              if self._on_tpu else 1)
-    self.log(run_values)
-
-  def end(self, session):
-    self._global_step = session.run(self._global_step_tensor)
-    self.log()
-
-  def log(self, run_values=None):
-    step = self._global_step if self._is_training else self._steps_run_so_far
-    if step % self._log_every != 0:
-      return
-    msg = "{:}/{:} = {:.1f}%".format(step, self._n_steps,
-                                     100.0 * step / self._n_steps)
-    time_elapsed = time.time() - self._start_time
-    time_per_step = time_elapsed / (
-        (step - self._start_step) if self._is_training else step)
-    msg += ", SPS: {:.1f}".format(1 / time_per_step)
-    msg += ", ELAP: " + secs_to_str(time_elapsed)
-    msg += ", ETA: " + secs_to_str(
-        (self._n_steps - step) * time_per_step)
-    if run_values is not None:
-      for tag, value in run_values.results.items():
-        msg += " - " + str(tag) + (": {:.4f}".format(value))
-    log(msg)
-
-
-def secs_to_str(secs):
-  s = str(datetime.timedelta(seconds=int(round(secs))))
-  s = re.sub("^0:", "", s)
-  s = re.sub("^0", "", s)
-  s = re.sub("^0:", "", s)
-  s = re.sub("^0", "", s)
-  return s
-
-
-def get_bert_config(config):
-  """Get model hyperparameters based on a pretraining/finetuning config"""
-  if config.model_size == "large":
-    args = {"hidden_size": 1024, "num_hidden_layers": 24}
-  elif config.model_size == "base":
-    args = {"hidden_size": 768, "num_hidden_layers": 12}
-  elif config.model_size == "small":
-    args = {"hidden_size": 256, "num_hidden_layers": 12}
-  else:
-    raise ValueError("Unknown model size", config.model_size)
-  args["vocab_size"] = config.vocab_size
-  args.update(**config.model_hparam_overrides)
-  # by default the ff size and num attn heads are determined by the hidden size
-  args["num_attention_heads"] = max(1, args["hidden_size"] // 64)
-  args["intermediate_size"] = 4 * args["hidden_size"]
-  args.update(**config.model_hparam_overrides)
-  return modeling.BertConfig.from_dict(args)
-
-
-def load_json(path):
-  with tf.io.gfile.GFile(path, "r") as f:
-    return json.load(f)
-
-
-def write_json(o, path):
-  if "/" in path:
-    tf.io.gfile.makedirs(path.rsplit("/", 1)[0])
-  with tf.io.gfile.GFile(path, "w") as f:
-    json.dump(o, f)
-
-
-def load_pickle(path):
-  with tf.io.gfile.GFile(path, "rb") as f:
-    return pickle.load(f)
-
-
-def write_pickle(o, path):
-  if "/" in path:
-    tf.io.gfile.makedirs(path.rsplit("/", 1)[0])
-  with tf.io.gfile.GFile(path, "wb") as f:
-    pickle.dump(o, f, -1)
-
-
-def mkdir(path):
-  if not tf.io.gfile.exists(path):
-    tf.io.gfile.makedirs(path)
-
-
-def rmrf(path):
-  if tf.io.gfile.exists(path):
-    tf.io.gfile.rmtree(path)
-
-
-def rmkdir(path):
-  rmrf(path)
-  mkdir(path)
-
-
-def log(*args):
-  msg = " ".join(map(str, args))
-  sys.stdout.write(msg + "\n")
-  sys.stdout.flush()
-
-
-def log_config(config):
-  for key, value in sorted(config.__dict__.items()):
-    log(key, value)
-  log()
-
-
-def heading(*args):
-  log(80 * "=")
-  log(*args)
-  log(80 * "=")
-
-
-def nest_dict(d, prefixes, delim="_"):
-  """Go from {prefix_key: value} to {prefix: {key: value}}."""
-  nested = {}
-  for k, v in d.items():
-    for prefix in prefixes:
-      if k.startswith(prefix + delim):
-        if prefix not in nested:
-          nested[prefix] = {}
-        nested[prefix][k.split(delim, 1)[1]] = v
-      else:
-        nested[k] = v
-  return nested
-
-
-def flatten_dict(d, delim="_"):
-  """Go from {prefix: {key: value}} to {prefix_key: value}."""
-  flattened = {}
-  for k, v in d.items():
-    if isinstance(v, dict):
-      for k2, v2 in v.items():
-        flattened[k + delim + k2] = v2
-    else:
-      flattened[k] = v
-  return flattened
-
-
-class FinetuningConfig(object):
-  """Fine-tuning hyperparameters."""
-
-  def __init__(self, model_name, data_dir, **kwargs):
-    # general
-    self.model_name = model_name
-    self.debug = False  # debug mode for quickly running things
-    self.log_examples = False  # print out some train examples for debugging
-    self.num_trials = 1  # how many train+eval runs to perform
-    self.do_train = True  # train a model
-    self.do_eval = True  # evaluate the model
-    self.keep_all_models = True  # if False, only keep the last trial's ckpt
-
-    # model
-    self.model_size = "small"  # one of "small", "base", or "large"
-    self.task_names = ["chunk"]  # which tasks to learn
-    # override the default transformer hparams for the provided model size; see
-    # modeling.BertConfig for the possible hparams and util.training_utils for
-    # the defaults
-    self.model_hparam_overrides = (
-        kwargs["model_hparam_overrides"]
-        if "model_hparam_overrides" in kwargs else {})
-    self.embedding_size = None  # bert hidden size by default
-    self.vocab_size = 30522  # number of tokens in the vocabulary
-    self.do_lower_case = True
-
-    # training
-    self.learning_rate = 5e-5
-    self.weight_decay_rate = 0.01
-    self.layerwise_lr_decay = 0.8  # if > 0, the learning rate for a layer is
-                                   # lr * lr_decay^(depth - max_depth) i.e.,
-                                   # shallower layers have lower learning rates
-    self.num_train_epochs = 3.0  # passes over the dataset during training
-    self.warmup_proportion = 0.1  # how much of training to warm up the LR for
-    self.save_checkpoints_steps = 1000000
-    self.iterations_per_loop = 1000
-    self.use_tfrecords_if_existing = True  # don't make tfrecords and write them
-                                           # to disc if existing ones are found
-
-    # writing model outputs to disc
-    self.write_test_outputs = True  # whether to write test set outputs,
-                                     # currently supported for GLUE + SQuAD 2.0
-    self.n_writes_test = 5  # write test set predictions for the first n trials
-
-    # sizing
-    self.max_seq_length = 64
-    self.train_batch_size = 16
-    self.eval_batch_size = 8
-    self.predict_batch_size = 8
-    self.double_unordered = True  # for tasks like paraphrase where sentence
-                                  # order doesn't matter, train the model on
-                                  # on both sentence orderings for each example
-    # for qa tasks
-    self.max_query_length = 64   # max tokens in q as opposed to context
-    self.doc_stride = 128  # stride when splitting doc into multiple examples
-    self.n_best_size = 20  # number of predictions per example to save
-    self.max_answer_length = 30  # filter out answers longer than this length
-    self.answerable_classifier = True  # answerable classifier for SQuAD 2.0
-    self.answerable_uses_start_logits = True  # more advanced answerable
-                                              # classifier using predicted start
-    self.answerable_weight = 0.5  # weight for answerability loss
-    self.joint_prediction = True  # jointly predict the start and end positions
-                                  # of the answer span
-    self.beam_size = 20  # beam size when doing joint predictions
-    self.qa_na_threshold = -2.75  # threshold for "no answer" when writing SQuAD
-                                  # 2.0 test outputs
-
-    # TPU settings
-    self.use_tpu = False
-    self.num_tpu_cores = 1
-    self.tpu_job_name = None
-    self.tpu_name = None  # cloud TPU to use for training
-    self.tpu_zone = None  # GCE zone where the Cloud TPU is located in
-    self.gcp_project = None  # project name for the Cloud TPU-enabled project
-
-    # default locations of data files
-    self.data_dir = data_dir
-    pretrained_model_dir = os.path.join(data_dir, "models", model_name)
-    self.raw_data_dir = os.path.join(data_dir, "finetuning_data", "{:}").format
-    self.vocab_file = os.path.join(pretrained_model_dir, "vocab.txt")
-    if not tf.io.gfile.exists(self.vocab_file):
-      self.vocab_file = os.path.join(self.data_dir, "vocab.txt")
-    task_names_str = ",".join(
-        kwargs["task_names"] if "task_names" in kwargs else self.task_names)
-    self.init_checkpoint = None if self.debug else pretrained_model_dir
-    self.model_dir = os.path.join(pretrained_model_dir, "finetuning_models",
-                                  task_names_str + "_model")
-    results_dir = os.path.join(pretrained_model_dir, "results")
-    self.results_txt = os.path.join(results_dir,
-                                    task_names_str + "_results.txt")
-    self.results_pkl = os.path.join(results_dir,
-                                    task_names_str + "_results.pkl")
-    qa_topdir = os.path.join(results_dir, task_names_str + "_qa")
-    self.qa_eval_file = os.path.join(qa_topdir, "{:}_eval.json").format
-    self.qa_preds_file = os.path.join(qa_topdir, "{:}_preds.json").format
-    self.qa_na_file = os.path.join(qa_topdir, "{:}_null_odds.json").format
-    self.preprocessed_data_dir = os.path.join(
-        pretrained_model_dir, "finetuning_tfrecords",
-        task_names_str + "_tfrecords" + ("-debug" if self.debug else ""))
-    self.test_predictions = os.path.join(
-        pretrained_model_dir, "test_predictions",
-        "{:}_{:}_{:}_predictions.pkl").format
-
-    # update defaults with passed-in hyperparameters
-    self.tasks = {}
-    self.update(kwargs)
-
-    # default hyperparameters for different model sizes
-    if self.model_size == "large":
-      self.learning_rate = 5e-5
-      self.layerwise_lr_decay = 0.9
-    elif self.model_size == "small":
-      self.embedding_size = 128
-
-    # debug-mode settings
-    if self.debug:
-      self.save_checkpoints_steps = 1000000
-      self.use_tfrecords_if_existing = False
-      self.num_trials = 1
-      self.iterations_per_loop = 1
-      self.train_batch_size = 32
-      self.num_train_epochs = 3.0
-      self.log_examples = True
-
-    # passed-in-arguments override (for example) debug-mode defaults
-    self.update(kwargs)
-
-  def update(self, kwargs):
-    for k, v in kwargs.items():
-      if k not in self.__dict__:
-        raise ValueError("Unknown hparam " + k)
-      self.__dict__[k] = v
+from util import training_utils
+from util import utils
 
 
 class FinetuningModel(object):
@@ -352,7 +40,7 @@ class FinetuningModel(object):
   def __init__(self, config: configure_finetuning.FinetuningConfig, tasks,
                is_training, features, num_train_steps):
     # Create a shared transformer encoder
-    bert_config = get_bert_config(config)
+    bert_config = training_utils.get_bert_config(config)
     self.bert_config = bert_config
     if config.debug:
       bert_config.num_hidden_layers = 3
@@ -391,7 +79,7 @@ def model_fn_builder(config: configure_finetuning.FinetuningConfig, tasks,
 
   def model_fn(features, labels, mode, params):
     """The `model_fn` for TPUEstimator."""
-    log("Building model...")
+    utils.log("Building model...")
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
     model = FinetuningModel(
         config, tasks, is_training, features, num_train_steps)
@@ -400,7 +88,7 @@ def model_fn_builder(config: configure_finetuning.FinetuningConfig, tasks,
     init_checkpoint = config.init_checkpoint
     if pretraining_config is not None:
       init_checkpoint = tf.train.latest_checkpoint(pretraining_config.model_dir)
-      log("Using checkpoint", init_checkpoint)
+      utils.log("Using checkpoint", init_checkpoint)
     tvars = tf.trainable_variables()
     scaffold_fn = None
     if init_checkpoint:
@@ -429,17 +117,17 @@ def model_fn_builder(config: configure_finetuning.FinetuningConfig, tasks,
           loss=model.loss,
           train_op=train_op,
           scaffold_fn=scaffold_fn,
-          training_hooks=[ETAHook(
+          training_hooks=[training_utils.ETAHook(
               {} if config.use_tpu else dict(loss=model.loss),
               num_train_steps, config.iterations_per_loop, config.use_tpu, 10)])
     else:
       assert mode == tf.estimator.ModeKeys.PREDICT
       output_spec = tf.estimator.tpu.TPUEstimatorSpec(
           mode=mode,
-          predictions=flatten_dict(model.outputs),
+          predictions=utils.flatten_dict(model.outputs),
           scaffold_fn=scaffold_fn)
 
-    log("Building complete")
+    utils.log("Building complete")
     return output_spec
 
   return model_fn
@@ -490,7 +178,7 @@ class ModelRunner(object):
         predict_batch_size=config.predict_batch_size)
 
   def train(self):
-    log("Training for {:} steps".format(self.train_steps))
+    utils.log("Training for {:} steps".format(self.train_steps))
     self._estimator.train(
         input_fn=self._train_input_fn, max_steps=self.train_steps)
 
@@ -505,25 +193,25 @@ class ModelRunner(object):
 
   def evaluate_task(self, task, split="dev", return_results=True):
     """Evaluate the current model."""
-    log("Evaluating", task.name)
+    utils.log("Evaluating", task.name)
     eval_input_fn, _ = self._preprocessor.prepare_predict([task], split)
     results = self._estimator.predict(input_fn=eval_input_fn,
                                       yield_single_examples=True)
     scorer = task.get_scorer()
     for r in results:
       if r["task_id"] != len(self._tasks):  # ignore padding examples
-        r = nest_dict(r, self._config.task_names)
+        r = utils.nest_dict(r, self._config.task_names)
         scorer.update(r[task.name])
     if return_results:
-      log(task.name + ": " + scorer.results_str())
-      log()
+      utils.log(task.name + ": " + scorer.results_str())
+      utils.log()
       return dict(scorer.get_results())
     else:
       return scorer
 
   def write_classification_outputs(self, tasks, trial, split):
     """Write classification predictions to disk."""
-    log("Writing out predictions for", tasks, split)
+    utils.log("Writing out predictions for", tasks, split)
     predict_input_fn, _ = self._preprocessor.prepare_predict(tasks, split)
     results = self._estimator.predict(input_fn=predict_input_fn,
                                       yield_single_examples=True)
@@ -531,24 +219,24 @@ class ModelRunner(object):
     logits = collections.defaultdict(dict)
     for r in results:
       if r["task_id"] != len(self._tasks):
-        r = nest_dict(r, self._config.task_names)
+        r = utils.nest_dict(r, self._config.task_names)
         task_name = self._config.task_names[r["task_id"]]
         logits[task_name][r[task_name]["eid"]] = (
             r[task_name]["logits"] if "logits" in r[task_name]
             else r[task_name]["predictions"])
     for task_name in logits:
-      log("Pickling predictions for {:} {:} examples ({:})".format(
+      utils.log("Pickling predictions for {:} {:} examples ({:})".format(
           len(logits[task_name]), task_name, split))
       if trial <= self._config.n_writes_test:
-        write_pickle(logits[task_name], self._config.test_predictions(
+        utils.write_pickle(logits[task_name], self._config.test_predictions(
             task_name, split, trial))
 
 
 def write_results(config: configure_finetuning.FinetuningConfig, results):
   """Write evaluation metrics to disk."""
-  log("Writing results to", config.results_txt)
-  mkdir(config.results_txt.rsplit("/", 1)[0])
-  write_pickle(results, config.results_pkl)
+  utils.log("Writing results to", config.results_txt)
+  utils.mkdir(config.results_txt.rsplit("/", 1)[0])
+  utils.write_pickle(results, config.results_pkl)
   with tf.io.gfile.GFile(config.results_txt, "w") as f:
     results_str = ""
     for trial_results in results:
@@ -559,7 +247,7 @@ def write_results(config: configure_finetuning.FinetuningConfig, results):
             ["{:}: {:.2f}".format(k, v)
              for k, v in task_results.items()]) + "\n"
     f.write(results_str)
-  write_pickle(results, config.results_pkl)
+  utils.write_pickle(results, config.results_pkl)
 
 
 def electra_finetuning(configs):
@@ -567,7 +255,7 @@ def electra_finetuning(configs):
   model_name = configs["model_name"]
   hparams = configs["hparams"]
   tf.logging.set_verbosity(tf.logging.ERROR)
-  config = FinetuningConfig(
+  config = configure_finetuning.FinetuningConfig(
       model_name, data_dir, **hparams)
   
   trial = 1
@@ -581,7 +269,7 @@ def electra_finetuning(configs):
   # Train and evaluate num_trials models with different random seeds
   config.model_dir = generic_model_dir + "_" + str(trial)
   if config.do_train:
-    rmkdir(config.model_dir)
+    utils.rmkdir(config.model_dir)
 
   model_runner = ModelRunner(config, tasks)
   return model_runner
