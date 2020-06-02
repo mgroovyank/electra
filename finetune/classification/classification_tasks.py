@@ -274,9 +274,14 @@ def read_tsv(input_file, quotechar=None, max_lines=None):
 class StandardTSV(ClassificationTask):
   def __init__(self, config: configure_finetuning.FinetuningConfig,
                task_name: str, task_config: dict, tokenizer):
-    super(StandardTSV, self).__init__(config, task_name, tokenizer,
-                               ["0", "1", "2"])
     self.task_config = task_config
+    labels = len(self.task_config.get("labels", None))
+    labels_list = []
+    for i in range(0, labels):
+      labels_list.append(str(i))
+    super(StandardTSV, self).__init__(config, task_name, tokenizer,
+                               labels_list)
+    #self.task_config = task_config
 
   def get_examples(self, split):
     return self._create_examples(read_tsv(
