@@ -47,11 +47,6 @@ import sklearn
 
 from typing import List, Tuple
 import random
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
 
 import tensorflow.compat.v1 as tf
@@ -191,7 +186,7 @@ class FinetuningConfig(object):
         raise ValueError("Unknown hparam " + k)
       self.__dict__[k] = v
 
-def get_shared_feature_specs(config: configure_finetuning.FinetuningConfig):
+def get_shared_feature_specs(config: FinetuningConfig):
   """Non-task-specific model inputs."""
   return [
       FeatureSpec("input_ids", [config.max_seq_length]),
@@ -226,7 +221,7 @@ class FeatureSpec(object):
 class Preprocessor(object):
   """Class for loading, preprocessing, and serializing fine-tuning datasets."""
 
-  def __init__(self, config: configure_finetuning.FinetuningConfig, tasks):
+  def __init__(self, config: FinetuningConfig, tasks):
     self._config = config
     self._tasks = tasks
     self._name_to_task = {task.name: task for task in tasks}
@@ -445,7 +440,7 @@ class Task(object):
 
   __metaclass__ = abc.ABCMeta
 
-  def __init__(self, config: configure_finetuning.FinetuningConfig, name):
+  def __init__(self, config: FinetuningConfig, name):
     self.config = config
     self.name = name
 
@@ -497,7 +492,7 @@ class SingleOutputTask(Task):
 
   __metaclass__ = abc.ABCMeta
 
-  def __init__(self, config: configure_finetuning.FinetuningConfig, name,
+  def __init__(self, config: FinetuningConfig, name,
                tokenizer):
     super(SingleOutputTask, self).__init__(config, name)
     self._tokenizer = tokenizer
@@ -639,7 +634,7 @@ class ClassificationTask(SingleOutputTask):
   """Task where the output is a single categorical label for the input text."""
   __metaclass__ = abc.ABCMeta
 
-  def __init__(self, config: configure_finetuning.FinetuningConfig, name,
+  def __init__(self, config: FinetuningConfig, name,
                tokenizer, label_list):
     super(ClassificationTask, self).__init__(config, name, tokenizer)
     self._tokenizer = tokenizer
@@ -721,7 +716,7 @@ def read_tsv(input_file, quotechar=None, max_lines=None):
 
   
 class StandardTSV(ClassificationTask):
-  def __init__(self, config: configure_finetuning.FinetuningConfig,
+  def __init__(self, config: FinetuningConfig,
                task_name: str, task_config: dict, tokenizer):
     self.task_config = task_config
     labels = len(self.task_config.get("labels", None))
@@ -746,14 +741,14 @@ class StandardTSV(ClassificationTask):
                            skip_first_line=header)
 
 
-def get_tasks(config: configure_finetuning.FinetuningConfig):
+def get_tasks(config: FinetuningConfig):
   tokenizer = tokenization.FullTokenizer(vocab_file=config.vocab_file,
                                          do_lower_case=config.do_lower_case)
   return [get_task(config, task_name, tokenizer)
           for task_name in config.task_names]
 
 
-def get_task(config: configure_finetuning.FinetuningConfig, task_name,
+def get_task(config: FinetuningConfig, task_name,
              tokenizer):
   """Get an instance of a task based on its name."""
   if (task_name in config.tasks):
@@ -769,7 +764,7 @@ def get_task(config: configure_finetuning.FinetuningConfig, task_name,
 class FinetuningModel(object):
   """Finetuning model with support for multi-task training."""
 
-  def __init__(self, config: configure_finetuning.FinetuningConfig, tasks,
+  def __init__(self, config: FinetuningConfig, tasks,
                is_training, features, num_train_steps):
     # Create a shared transformer encoder
     bert_config = get_bert_config(config)
@@ -805,7 +800,7 @@ class FinetuningModel(object):
         tf.one_hot(features["task_id"], len(config.task_names)))
 
 
-def model_fn_builder(config: configure_finetuning.FinetuningConfig, tasks,
+def model_fn_builder(config: FinetuningConfig, tasks,
                      num_train_steps, pretraining_config=None):
   """Returns `model_fn` closure for TPUEstimator."""
 
@@ -868,7 +863,7 @@ def model_fn_builder(config: configure_finetuning.FinetuningConfig, tasks,
 class ModelRunner(object):
   """Fine-tunes a model on a supervised task."""
 
-  def __init__(self, config: configure_finetuning.FinetuningConfig, tasks,
+  def __init__(self, config: FinetuningConfig, tasks,
                pretraining_config=None):
     self._config = config
     self._tasks = tasks
@@ -964,7 +959,7 @@ class ModelRunner(object):
             task_name, split, trial))
 
 
-def write_results(config: configure_finetuning.FinetuningConfig, results):
+def write_results(config: FinetuningConfig, results):
   """Write evaluation metrics to disk."""
   log("Writing results to", config.results_txt)
   mkdir(config.results_txt.rsplit("/", 1)[0])
@@ -987,7 +982,7 @@ def electra_finetuning(configs):
   model_name = configs["model_name"]
   hparams = configs["hparams"]
   tf.logging.set_verbosity(tf.logging.ERROR)
-  config = configure_finetuning.FinetuningConfig(
+  config = FinetuningConfig(
       model_name, data_dir, **hparams)
   
   trial = 1
