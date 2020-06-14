@@ -500,6 +500,7 @@ class SingleOutputTask(Task):
   def get_examples(self, split):
     return self._create_examples(read_csv(
         os.path.join(self.config.raw_data_dir(self.name), split + ".csv"),
+      quotechar = '"',
         max_lines=100 if self.config.debug else None), split)
 
   @abc.abstractmethod
