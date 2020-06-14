@@ -498,8 +498,8 @@ class SingleOutputTask(Task):
     self._tokenizer = tokenizer
 
   def get_examples(self, split):
-    return self._create_examples(read_tsv(
-        os.path.join(self.config.raw_data_dir(self.name), split + ".tsv"),
+    return self._create_examples(read_csv(
+        os.path.join(self.config.raw_data_dir(self.name), split + ".csv"),
         max_lines=100 if self.config.debug else None), split)
 
   @abc.abstractmethod
@@ -702,10 +702,10 @@ def _truncate_seq_pair(tokens_a, tokens_b, max_length):
       tokens_b.pop()
 
 
-def read_tsv(input_file, quotechar=None, max_lines=None):
+def read_csv(input_file, quotechar=None, max_lines=None):
   """Reads a tab separated value file."""
   with tf.io.gfile.GFile(input_file, "r") as f:
-    reader = csv.reader(f, delimiter="\t", quotechar=quotechar)
+    reader = csv.reader(f, delimiter=",", quotechar=quotechar)
     lines = []
     for i, line in enumerate(reader):
       if max_lines and i >= max_lines:
@@ -728,8 +728,8 @@ class StandardTSV(ClassificationTask):
     #self.task_config = task_config
 
   def get_examples(self, split):
-    return self._create_examples(read_tsv(
-        os.path.join(self.config.raw_data_dir(self.name), split + ".tsv"),
+    return self._create_examples(read_csv(
+        os.path.join(self.config.raw_data_dir(self.name), split + ".csv"),
         quotechar="\"",
         max_lines=100 if self.config.debug else None), split)
 
