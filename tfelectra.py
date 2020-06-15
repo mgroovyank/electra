@@ -52,7 +52,7 @@ import os
 import tensorflow.compat.v1 as tf
 
 
-class FinetuningConfig(object):
+class Configs(object):
   """Fine-tuning hyperparameters."""
 
   def __init__(self, data_dir, model_name="electra_base", model_size ="base",  
@@ -1149,4 +1149,4 @@ def get_bert_config(config):
 
 
 if __name__ == "__main__":
-  main()
+  print("A package for sentiment classifcation using ELECTRA")
