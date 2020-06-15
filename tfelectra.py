@@ -55,52 +55,56 @@ import tensorflow.compat.v1 as tf
 class FinetuningConfig(object):
   """Fine-tuning hyperparameters."""
 
-  def __init__(self, model_name, data_dir, **kwargs):
+  def __init__(self, data_dir, model_name="electra_base", model_size ="base",  
+              learning_rate = 5e-5, num_train_epochs=3.0, train_batch_size = 16,
+              eval_batch_size = 8, predict_batch_size = 8, do_train = True, 
+              do_eval = True, do_predict = False, label_list = ["0", "1"],
+              do_lower_case = True, max_seq_length = 256, use_tpu = False,
+              iterations_per_loop = 1000, save_checkpoint_steps = 1000000,
+              warmup_proportion = 0.1):
     # general
     self.model_name = model_name
     self.debug = False  # debug mode for quickly running things
     self.log_examples = False  # print out some train examples for debugging
     self.num_trials = 1  # how many train+eval runs to perform
-    self.do_train = True  # train a model
-    self.do_eval = True  # evaluate the model
+    self.do_train = do_train  # train a model
+    self.do_eval = do_eval  # evaluate the model
     self.keep_all_models = True  # if False, only keep the last trial's ckpt
 
     # model
-    self.model_size = "small"  # one of "small", "base", or "large"
-    self.task_names = ["chunk"]  # which tasks to learn
+    self.model_size = model_size  # one of "small", "base", or "large"
+    self.task_names = ["sentimentclassification"]  # which tasks to learn
     # override the default transformer hparams for the provided model size; see
     # modeling.BertConfig for the possible hparams and util.training_utils for
     # the defaults
-    self.model_hparam_overrides = (
-        kwargs["model_hparam_overrides"]
-        if "model_hparam_overrides" in kwargs else {})
+    self.model_hparam_overrides = {}
     self.embedding_size = None  # bert hidden size by default
     self.vocab_size = 30522  # number of tokens in the vocabulary
-    self.do_lower_case = True
+    self.do_lower_case = do_lower_case
 
     # training
-    self.learning_rate = 5e-5
+    self.learning_rate = learning_rate
     self.weight_decay_rate = 0.01
     self.layerwise_lr_decay = 0.8  # if > 0, the learning rate for a layer is
                                    # lr * lr_decay^(depth - max_depth) i.e.,
                                    # shallower layers have lower learning rates
-    self.num_train_epochs = 3.0  # passes over the dataset during training
-    self.warmup_proportion = 0.1  # how much of training to warm up the LR for
-    self.save_checkpoints_steps = 1000000
-    self.iterations_per_loop = 1000
+    self.num_train_epochs = num_train_epochs  # passes over the dataset during training
+    self.warmup_proportion = warmup_proportion  # how much of training to warm up the LR for
+    self.save_checkpoints_steps = save_checkpoint_steps
+    self.iterations_per_loop = iterations_per_loop
     self.use_tfrecords_if_existing = True  # don't make tfrecords and write them
                                            # to disc if existing ones are found
 
     # writing model outputs to disc
-    self.write_test_outputs = True  # whether to write test set outputs,
+    self.write_test_outputs = do_predict  # whether to write test set outputs,
                                      # currently supported for GLUE + SQuAD 2.0
     self.n_writes_test = 5  # write test set predictions for the first n trials
 
     # sizing
-    self.max_seq_length = 64
-    self.train_batch_size = 16
-    self.eval_batch_size = 8
-    self.predict_batch_size = 8
+    self.max_seq_length = max_seq_length
+    self.train_batch_size = train_batch_size
+    self.eval_batch_size = eval_batch_size
+    self.predict_batch_size = predict_batch_size
     self.double_unordered = True  # for tasks like paraphrase where sentence
                                   # order doesn't matter, train the model on
                                   # on both sentence orderings for each example
@@ -120,8 +124,7 @@ class FinetuningConfig(object):
     self.vocab_file = os.path.join(pretrained_model_dir, "vocab.txt")
     if not tf.io.gfile.exists(self.vocab_file):
       self.vocab_file = os.path.join(self.data_dir, "vocab.txt")
-    task_names_str = ",".join(
-        kwargs["task_names"] if "task_names" in kwargs else self.task_names)
+    task_names_str = "sentimentclassification"
     self.init_checkpoint = None if self.debug else pretrained_model_dir
     self.model_dir = os.path.join(pretrained_model_dir, "finetuning_models",
                                   task_names_str + "_model")
@@ -142,8 +145,15 @@ class FinetuningConfig(object):
         "{:}_{:}_{:}_predictions.pkl").format
 
     # update defaults with passed-in hyperparameters
-    self.tasks = {}
-    self.update(kwargs)
+    self.tasks = {
+      "sentimentclassification":{
+        "type":"classification",
+        "labels":label_list,
+        "header":True,
+        "text_column":1,
+        "label_column":2
+        }
+    }
 
 
     # default hyperparameters for different model sizes
@@ -163,14 +173,6 @@ class FinetuningConfig(object):
       self.num_train_epochs = 3.0
       self.log_examples = True
 
-    # passed-in-arguments override (for example) debug-mode defaults
-    self.update(kwargs)
-
-  def update(self, kwargs):
-    for k, v in kwargs.items():
-      if k not in self.__dict__:
-        raise ValueError("Unknown hparam " + k)
-      self.__dict__[k] = v
 
 def get_shared_feature_specs(config: FinetuningConfig):
   """Non-task-specific model inputs."""
@@ -846,11 +848,23 @@ def model_fn_builder(config: FinetuningConfig, tasks,
   return model_fn
 
 
-class ModelRunner(object):
+class ElectraClassification(object):
   """Fine-tunes a model on a supervised task."""
 
-  def __init__(self, config: FinetuningConfig, tasks,
-               pretraining_config=None):
+  def __init__(self, config: FinetuningConfig, pretraining_config=None):
+    tf.logging.set_verbosity(tf.logging.ERROR)
+    trial = 1
+    heading_info = "model={:}, trial {:}/{:}".format(config.model_name, trial, config.num_trials)
+    heading2 = lambda msg: heading(msg + ": " + heading_info)
+    heading2("Config")
+    log_config(config)
+    generic_model_dir = config.model_dir
+    tasks = get_tasks(config)
+    # Train and evaluate num_trials models with different random seeds
+    config.model_dir = generic_model_dir + "_" + str(trial)
+    if config.do_train:
+      rmkdir(config.model_dir)
+      
     self._config = config
     self._tasks = tasks
     self._preprocessor = Preprocessor(config, self._tasks)
@@ -891,18 +905,24 @@ class ModelRunner(object):
         predict_batch_size=config.predict_batch_size)
 
   def train(self):
+    heading("Start training")
     log("Training for {:} steps".format(self.train_steps))
-    self._estimator.train(
-        input_fn=self._train_input_fn, max_steps=self.train_steps)
+    self._estimator.train(input_fn=self._train_input_fn, max_steps=self.train_steps)
+    heading("Training Finished")
+    if self._config.do_eval:
+      self.evaluate()
+    
 
   def evaluate(self):
+    heading("Start Evaluation")
     return {task.name: self.evaluate_task(task) for task in self._tasks}
   
   def test(self):
     tasks = get_tasks(self._config)
     for task in tasks:
       for split in task.get_test_splits():
-        self.write_classification_outputs([task], 1, split)
+        logits = self.write_classification_outputs([task], 1, split)
+      return logits   
 
   def evaluate_task(self, task, split="dev", return_results=True):
     """Evaluate the current model."""
@@ -938,12 +958,9 @@ class ModelRunner(object):
             r[task_name]["logits"] if "logits" in r[task_name]
             else r[task_name]["predictions"])
     for task_name in logits:
-      log("Pickling predictions for {:} {:} examples ({:})".format(
+      log("Getting predictions for {:} {:} examples ({:})".format(
           len(logits[task_name]), task_name, split))
-      if trial <= self._config.n_writes_test:
-        write_pickle(logits[task_name], self._config.test_predictions(
-            task_name, split, trial))
-
+      return logits[task_name]
 
 def write_results(config: FinetuningConfig, results):
   """Write evaluation metrics to disk."""
@@ -962,30 +979,6 @@ def write_results(config: FinetuningConfig, results):
     f.write(results_str)
   write_pickle(results, config.results_pkl)
 
-
-def electra_finetuning(configs):
-  data_dir = configs["data_dir"]
-  model_name = configs["model_name"]
-  hparams = configs["hparams"]
-  tf.logging.set_verbosity(tf.logging.ERROR)
-  config = FinetuningConfig(
-      model_name, data_dir, **hparams)
-  
-  trial = 1
-  heading_info = "model={:}, trial {:}/{:}".format(
-      config.model_name, trial, config.num_trials)
-  heading2 = lambda msg: heading(msg + ": " + heading_info)
-  heading2("Config")
-  log_config(config)
-  generic_model_dir = config.model_dir
-  tasks = get_tasks(config)
-  # Train and evaluate num_trials models with different random seeds
-  config.model_dir = generic_model_dir + "_" + str(trial)
-  if config.do_train:
-    rmkdir(config.model_dir)
-
-  model_runner = ModelRunner(config, tasks)
-  return model_runner
 
 
 def load_json(path):
