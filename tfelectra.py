@@ -174,7 +174,7 @@ class Configs(object):
       self.log_examples = True
 
 
-def get_shared_feature_specs(config: FinetuningConfig):
+def get_shared_feature_specs(config: Configs):
   """Non-task-specific model inputs."""
   return [
       FeatureSpec("input_ids", [config.max_seq_length]),
@@ -209,7 +209,7 @@ class FeatureSpec(object):
 class Preprocessor(object):
   """Class for loading, preprocessing, and serializing fine-tuning datasets."""
 
-  def __init__(self, config: FinetuningConfig, tasks):
+  def __init__(self, config: Configs, tasks):
     self._config = config
     self._tasks = tasks
     self._name_to_task = {task.name: task for task in tasks}
@@ -428,7 +428,7 @@ class Task(object):
 
   __metaclass__ = abc.ABCMeta
 
-  def __init__(self, config: FinetuningConfig, name):
+  def __init__(self, config: Configs, name):
     self.config = config
     self.name = name
 
@@ -480,7 +480,7 @@ class SingleOutputTask(Task):
 
   __metaclass__ = abc.ABCMeta
 
-  def __init__(self, config: FinetuningConfig, name,
+  def __init__(self, config: Configs, name,
                tokenizer):
     super(SingleOutputTask, self).__init__(config, name)
     self._tokenizer = tokenizer
@@ -622,7 +622,7 @@ class ClassificationTask(SingleOutputTask):
   """Task where the output is a single categorical label for the input text."""
   __metaclass__ = abc.ABCMeta
 
-  def __init__(self, config: FinetuningConfig, name,
+  def __init__(self, config: Configs, name,
                tokenizer, label_list):
     super(ClassificationTask, self).__init__(config, name, tokenizer)
     self._tokenizer = tokenizer
@@ -704,7 +704,7 @@ def read_csv(input_file, quotechar=None, max_lines=None):
 
   
 class StandardTSV(ClassificationTask):
-  def __init__(self, config: FinetuningConfig,
+  def __init__(self, config: Configs,
                task_name: str, task_config: dict, tokenizer):
     self.task_config = task_config
     labels = len(self.task_config.get("labels", None))
@@ -729,14 +729,14 @@ class StandardTSV(ClassificationTask):
                            skip_first_line=header)
 
 
-def get_tasks(config: FinetuningConfig):
+def get_tasks(config: Configs):
   tokenizer = tokenization.FullTokenizer(vocab_file=config.vocab_file,
                                          do_lower_case=config.do_lower_case)
   return [get_task(config, task_name, tokenizer)
           for task_name in config.task_names]
 
 
-def get_task(config: FinetuningConfig, task_name,
+def get_task(config: Configs, task_name,
              tokenizer):
   """Get an instance of a task based on its name."""
   if (task_name in config.tasks):
@@ -752,7 +752,7 @@ def get_task(config: FinetuningConfig, task_name,
 class FinetuningModel(object):
   """Finetuning model with support for multi-task training."""
 
-  def __init__(self, config: FinetuningConfig, tasks,
+  def __init__(self, config: Configs, tasks,
                is_training, features, num_train_steps):
     # Create a shared transformer encoder
     bert_config = get_bert_config(config)
@@ -788,7 +788,7 @@ class FinetuningModel(object):
         tf.one_hot(features["task_id"], len(config.task_names)))
 
 
-def model_fn_builder(config: FinetuningConfig, tasks,
+def model_fn_builder(config: Configs, tasks,
                      num_train_steps, pretraining_config=None):
   """Returns `model_fn` closure for TPUEstimator."""
 
@@ -851,7 +851,7 @@ def model_fn_builder(config: FinetuningConfig, tasks,
 class ElectraClassification(object):
   """Fine-tunes a model on a supervised task."""
 
-  def __init__(self, config: FinetuningConfig, pretraining_config=None):
+  def __init__(self, config: Configs, pretraining_config=None):
     tf.logging.set_verbosity(tf.logging.ERROR)
     trial = 1
     heading_info = "model={:}, trial {:}/{:}".format(config.model_name, trial, config.num_trials)
@@ -962,7 +962,7 @@ class ElectraClassification(object):
           len(logits[task_name]), task_name, split))
       return logits[task_name]
 
-def write_results(config: FinetuningConfig, results):
+def write_results(config: Configs, results):
   """Write evaluation metrics to disk."""
   log("Writing results to", config.results_txt)
   mkdir(config.results_txt.rsplit("/", 1)[0])
