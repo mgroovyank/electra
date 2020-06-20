@@ -55,7 +55,12 @@ import tensorflow.compat.v1 as tf
 class Configs(object):
   """Fine-tuning hyperparameters."""
 
-  def __init__(self, data_dir, model_name="electra_base", model_size ="base",  
+  def __init__(self, vocab_file = "./uncased_L-12H-768_A-12/vocab.txt",
+              init_checkpoint = "./uncased_L-12H-768_A-12/electra_base",
+              data_dir = "./data/", 
+              output_dir = "./bert_output/",
+              export_dir = None,
+              model_name="electra_base", model_size ="base",  
               learning_rate = 5e-5, num_train_epochs=3.0, train_batch_size = 16,
               eval_batch_size = 8, predict_batch_size = 8, do_train = True, 
               do_eval = True, do_predict = False, label_list = ["0", "1"],
@@ -119,30 +124,16 @@ class Configs(object):
 
     # default locations of data files
     self.data_dir = data_dir
-    pretrained_model_dir = os.path.join(data_dir, "models", model_name)
-    self.raw_data_dir = os.path.join(data_dir, "finetuning_data", "{:}").format
-    self.vocab_file = os.path.join(pretrained_model_dir, "vocab.txt")
-    if not tf.io.gfile.exists(self.vocab_file):
-      self.vocab_file = os.path.join(self.data_dir, "vocab.txt")
+    pretrained_model_dir = os.path.join(init_checkpoint)
+    self.raw_data_dir = os.path.join(data_dir)
+    self.vocab_file = os.path.join(vocab_file)
+    #if not tf.io.gfile.exists(self.vocab_file):
+      #self.vocab_file = os.path.join(init_checkpoint, "vocab.txt")
     task_names_str = "sentimentclassification"
     self.init_checkpoint = None if self.debug else pretrained_model_dir
-    self.model_dir = os.path.join(pretrained_model_dir, "finetuning_models",
-                                  task_names_str + "_model")
-    results_dir = os.path.join(pretrained_model_dir, "results")
-    self.results_txt = os.path.join(results_dir,
-                                    task_names_str + "_results.txt")
-    self.results_pkl = os.path.join(results_dir,
-                                    task_names_str + "_results.pkl")
-    qa_topdir = os.path.join(results_dir, task_names_str + "_qa")
-    self.qa_eval_file = os.path.join(qa_topdir, "{:}_eval.json").format
-    self.qa_preds_file = os.path.join(qa_topdir, "{:}_preds.json").format
-    self.qa_na_file = os.path.join(qa_topdir, "{:}_null_odds.json").format
-    self.preprocessed_data_dir = os.path.join(
-        pretrained_model_dir, "finetuning_tfrecords",
-        task_names_str + "_tfrecords" + ("-debug" if self.debug else ""))
-    self.test_predictions = os.path.join(
-        pretrained_model_dir, "test_predictions",
-        "{:}_{:}_{:}_predictions.pkl").format
+    self.model_dir = os.path.join(output_dir)
+    self.preprocessed_data_dir = os.path.join(output_dir)
+
 
     # update defaults with passed-in hyperparameters
     self.tasks = {
@@ -487,7 +478,7 @@ class SingleOutputTask(Task):
 
   def get_examples(self, split):
     return self._create_examples(read_csv(
-        os.path.join(self.config.raw_data_dir(self.name), split + ".csv"),
+        os.path.join(self.config.raw_data_dir, split + ".csv"),
         max_lines=100 if self.config.debug else None), split)
 
   @abc.abstractmethod
@@ -717,7 +708,7 @@ class StandardTSV(ClassificationTask):
 
   def get_examples(self, split):
     return self._create_examples(read_csv(
-        os.path.join(self.config.raw_data_dir(self.name), split + ".csv"),
+        os.path.join(self.config.raw_data_dir, split + ".csv"),
         quotechar = "\"",
         max_lines=100 if self.config.debug else None), split)
 
@@ -861,7 +852,7 @@ class ElectraClassification(object):
     generic_model_dir = config.model_dir
     tasks = get_tasks(config)
     # Train and evaluate num_trials models with different random seeds
-    config.model_dir = generic_model_dir + "_" + str(trial)
+    config.model_dir = generic_model_dir #+ "_" + str(trial)
     if config.do_train:
       rmkdir(config.model_dir)
       
