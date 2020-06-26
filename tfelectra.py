@@ -49,7 +49,9 @@ from typing import List, Tuple
 import random
 import os
 
-import tensorflow.compat.v1 as tf
+from itertools import product 
+import matplotlib.pyplot as plt
+from sklearn.metrics import precision_score, accuracy_score, f1_score, recall_score, confusion_matrix
 
 
 class Configs(object):
@@ -68,6 +70,7 @@ class Configs(object):
               iterations_per_loop = 1000, save_checkpoint_steps = 1000000,
               warmup_proportion = 0.1):
     # general
+    self.label_list = label_list
     self.model_name = model_name
     self.debug = False  # debug mode for quickly running things
     self.log_examples = False  # print out some train examples for debugging
@@ -137,7 +140,7 @@ class Configs(object):
 
     # update defaults with passed-in hyperparameters
     self.tasks = {
-      "sentimentclassification":{
+      task_names_str:{
         "type":"classification",
         "labels":label_list,
         "header":True,
@@ -913,7 +916,10 @@ class ElectraClassification(object):
     for task in tasks:
       for split in task.get_test_splits():
         logits = self.write_classification_outputs([task], 1, split)
-      return logits   
+      preds = []
+      for i in logits:
+        preds.append(scipy.special.expit(i))
+      return preds   
 
   def evaluate_task(self, task, split="dev", return_results=True):
     """Evaluate the current model."""
@@ -928,7 +934,6 @@ class ElectraClassification(object):
         scorer.update(r[task.name])
     if return_results:
       log(task.name + ": " + scorer.results_str())
-      log()
       return dict(scorer.get_results())
     else:
       return scorer
@@ -951,7 +956,38 @@ class ElectraClassification(object):
     for task_name in logits:
       log("Getting predictions for {:} {:} examples ({:})".format(
           len(logits[task_name]), task_name, split))
-      return logits[task_name]
+      logits = logits[task_name].values()
+      return logits
+
+  def plot_confusion_matrix(self, cm, classes = [0, 1], cmap = plt.cm.Accent):
+    #function to plot confusion matrix
+    title = "Confusion matrix"
+    plt.imshow(cm, interpolation="nearest", cmap=cmap) 
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks (tick_marks, classes)
+    
+    fmt = "d" 
+    thresh = cm.max() / 2.
+    for i, j in product(range(cm.shape[0]), range(cm.shape[1])):
+      plt.text(j, i, format(cm[i, j], fmt),
+      horizontalalignment="center",
+      color="black")
+      
+    plt.tight_layout()
+    plt.ylabel("True label")
+    plt.xlabel("Predicted label")
+
+  def report(self, y_true, y_pred):
+    cm = confusion_matrix(y_true, y_pred)
+    self.plot_confusion_matrix(cm, self._config.label_list)
+    print("\n") 
+    print("Accuracy: {0:.3f}".format(accuracy_score(y_true, y_pred))) 
+    print("Precision: {0:.3f}".format(precision_score(y_true, y_pred, average="macro")))
+    print("Recall: {0:.3f}".format(recall_score(y_true, y_pred, average="macro")))
+    print("F1-Score: {0:.3f}".format(f1_score(y_true, y_pred, average="macro")))      
 
 def write_results(config: Configs, results):
   """Write evaluation metrics to disk."""
